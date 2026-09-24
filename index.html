@@ -25,8 +25,9 @@
       padding: 0;
       width: 100%;
       height: 100%;
-      background: #000000;
+      background: #000;
       overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     #chart {
@@ -36,36 +37,47 @@
       height: 100vh;
     }
 
-    #status {
+    #header {
       position: fixed;
       top: max(12px, env(safe-area-inset-top));
       left: 12px;
-      z-index: 10;
-
-      padding: 6px 9px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
       border-radius: 8px;
-
-      background: rgba(0, 0, 0, 0.70);
-      color: #ffffff;
-
-      font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-
-      font-size: 12px;
-      font-weight: 600;
-
+      background: rgba(0, 0, 0, 0.78);
       pointer-events: none;
     }
 
-    #status.live {
+    #status {
       color: #20e38b;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    #livePrice {
+      color: #fff;
+      font-size: 17px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #flash {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #20e38b;
+      opacity: 0.35;
+    }
+
+    #flash.tick {
+      opacity: 1;
     }
 
     #status.error {
-      color: #ff5c70;
+      color: #ff4d67;
     }
   </style>
 </head>
@@ -73,7 +85,12 @@
 <body>
 
   <div id="chart"></div>
-  <div id="status">CONNECTING…</div>
+
+  <div id="header">
+    <div id="flash"></div>
+    <div id="status">CONNECTING…</div>
+    <div id="livePrice">--</div>
+  </div>
 
   <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
 
@@ -81,76 +98,134 @@
     const PRODUCT = "XRP-USD";
     const GRANULARITY = 900;
 
-    const chartContainer =
-      document.getElementById("chart");
+    const chartElement = document.getElementById("chart");
+    const statusElement = document.getElementById("status");
+    const priceElement = document.getElementById("livePrice");
+    const flashElement = document.getElementById("flash");
 
-    const status =
-      document.getElementById("status");
+    const chart = LightweightCharts.createChart(chartElement, {
+      width: window.innerWidth,
+      height: window.innerHeight,
 
-    const chart =
-      LightweightCharts.createChart(
-        chartContainer,
-        {
-          width: window.innerWidth,
-          height: window.innerHeight,
+      layout: {
+        background: {
+          color: "#000000"
+        },
+        textColor: "#ffffff"
+      },
 
-          layout: {
-            background: {
-              color: "#000000"
-            },
-
-            textColor: "#ffffff"
-          },
-
-          grid: {
-            vertLines: {
-              color: "#1d1d1d"
-            },
-
-            horzLines: {
-              color: "#1d1d1d"
-            }
-          },
-
-          rightPriceScale: {
-            borderColor: "#333333"
-          },
-
-          timeScale: {
-            borderColor: "#333333",
-            timeVisible: true,
-            secondsVisible: false,
-            rightOffset: 4,
-            barSpacing: 8
-          },
-
-          crosshair: {
-            mode:
-              LightweightCharts.CrosshairMode.Normal
-          }
+      grid: {
+        vertLines: {
+          color: "#1d1d1d"
+        },
+        horzLines: {
+          color: "#1d1d1d"
         }
-      );
+      },
 
-    const candleSeries =
-      chart.addCandlestickSeries({
-        upColor: "#20e38b",
-        downColor: "#ff4d67",
+      rightPriceScale: {
+        borderColor: "#333333",
+        scaleMargins: {
+          top: 0.10,
+          bottom: 0.10
+        }
+      },
 
-        borderUpColor: "#20e38b",
-        borderDownColor: "#ff4d67",
+      timeScale: {
+        borderColor: "#333333",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 5,
+        barSpacing: 11
+      },
 
-        wickUpColor: "#20e38b",
-        wickDownColor: "#ff4d67"
-      });
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal
+      }
+    });
+
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: "#20e38b",
+      downColor: "#ff4d67",
+
+      borderUpColor: "#20e38b",
+      borderDownColor: "#ff4d67",
+
+      wickUpColor: "#20e38b",
+      wickDownColor: "#ff4d67",
+
+      priceLineVisible: true,
+      lastValueVisible: true
+    });
 
     let currentCandle = null;
+    let previousPrice = null;
+    let socket = null;
+    let reconnectTimer = null;
 
-    function getCandleTime(unixTime) {
-      return (
-        Math.floor(
-          unixTime / GRANULARITY
-        ) * GRANULARITY
-      );
+    function candleStart(unixSeconds) {
+      return Math.floor(unixSeconds / GRANULARITY) * GRANULARITY;
+    }
+
+    function flashTick() {
+      flashElement.classList.add("tick");
+
+      setTimeout(() => {
+        flashElement.classList.remove("tick");
+      }, 80);
+    }
+
+    function displayPrice(price) {
+      priceElement.textContent = "$" + price.toFixed(5);
+
+      if (previousPrice !== null) {
+        if (price > previousPrice) {
+          priceElement.style.color = "#20e38b";
+        } else if (price < previousPrice) {
+          priceElement.style.color = "#ff4d67";
+        }
+      }
+
+      previousPrice = price;
+      flashTick();
+    }
+
+    function applyLivePrice(price, timestamp) {
+      if (!Number.isFinite(price)) {
+        return;
+      }
+
+      const unixSeconds = timestamp
+        ? Math.floor(timestamp / 1000)
+        : Math.floor(Date.now() / 1000);
+
+      const time = candleStart(unixSeconds);
+
+      if (!currentCandle || currentCandle.time !== time) {
+        currentCandle = {
+          time: time,
+          open: price,
+          high: price,
+          low: price,
+          close: price
+        };
+      } else {
+        currentCandle.high = Math.max(currentCandle.high, price);
+        currentCandle.low = Math.min(currentCandle.low, price);
+        currentCandle.close = price;
+      }
+
+      candleSeries.update({
+        time: currentCandle.time,
+        open: currentCandle.open,
+        high: currentCandle.high,
+        low: currentCandle.low,
+        close: currentCandle.close
+      });
+
+      displayPrice(price);
+
+      chart.timeScale().scrollToRealTime();
     }
 
     async function loadHistory() {
@@ -160,71 +235,59 @@
         "/candles?granularity=" +
         GRANULARITY;
 
-      const response =
-        await fetch(url, {
-          cache: "no-store"
-        });
+      const response = await fetch(url, {
+        cache: "no-store"
+      });
 
       if (!response.ok) {
-        throw new Error(
-          "History request failed"
-        );
+        throw new Error("Unable to load Coinbase candle history");
       }
 
-      const data =
-        await response.json();
+      const raw = await response.json();
 
-      const formatted =
-        data
-          .map(candle => ({
-            time: Number(candle[0]),
-            low: Number(candle[1]),
-            high: Number(candle[2]),
-            open: Number(candle[3]),
-            close: Number(candle[4])
-          }))
-          .sort(
-            (a, b) =>
-              a.time - b.time
-          );
+      const history = raw
+        .map(candle => ({
+          time: Number(candle[0]),
+          low: Number(candle[1]),
+          high: Number(candle[2]),
+          open: Number(candle[3]),
+          close: Number(candle[4])
+        }))
+        .sort((a, b) => a.time - b.time);
 
-      candleSeries.setData(
-        formatted
-      );
+      candleSeries.setData(history);
 
-      currentCandle =
-        formatted[
-          formatted.length - 1
-        ];
+      if (history.length > 0) {
+        currentCandle = {
+          ...history[history.length - 1]
+        };
 
-      chart
-        .timeScale()
-        .scrollToRealTime();
+        displayPrice(currentCandle.close);
+      }
+
+      chart.timeScale().scrollToRealTime();
     }
 
-    function connectLiveFeed() {
-      const socket =
-        new WebSocket(
-          "wss://advanced-trade-ws.coinbase.com"
-        );
+    function connect() {
+      if (socket) {
+        try {
+          socket.close();
+        } catch (error) {}
+      }
+
+      statusElement.textContent = "CONNECTING…";
+      statusElement.className = "";
+
+      socket = new WebSocket(
+        "wss://advanced-trade-ws.coinbase.com"
+      );
 
       socket.onopen = () => {
-        status.textContent =
-          "XRP/USD · 15m · LIVE";
-
-        status.className =
-          "live";
-
         socket.send(
           JSON.stringify({
             type: "subscribe",
-
-            product_ids: [
-              PRODUCT
-            ],
-
-            channel:
-              "market_trades"
+            product_ids: [PRODUCT],
+            channel: "ticker"
           })
         );
       };
@@ -233,166 +296,96 @@
         let message;
 
         try {
-          message =
-            JSON.parse(
-              event.data
-            );
-        } catch {
+          message = JSON.parse(event.data);
+        } catch (error) {
           return;
         }
 
-        if (
-          message.channel !==
-          "market_trades"
-        ) {
+        if (message.channel === "subscriptions") {
+          statusElement.textContent = "XRP/USD · 15m · LIVE";
           return;
         }
 
-        const events =
-          message.events || [];
+        if (message.channel !== "ticker") {
+          return;
+        }
 
-        for (
-          const eventItem
-          of events
-        ) {
-          const trades =
-            eventItem.trades || [];
+        const events = Array.isArray(message.events)
+          ? message.events
+          : [];
 
-          for (
-            const trade
-            of trades
-          ) {
-            const price =
-              Number(
-                trade.price
-              );
+        for (const eventItem of events) {
+          const tickers = Array.isArray(eventItem.tickers)
+            ? eventItem.tickers
+            : [];
 
+          for (const ticker of tickers) {
             if (
-              !Number.isFinite(
-                price
-              )
+              ticker.product_id &&
+              ticker.product_id !== PRODUCT
             ) {
               continue;
             }
 
-            const tradeTime =
-              trade.time
-                ? Math.floor(
-                    new Date(
-                      trade.time
-                    ).getTime() /
-                      1000
-                  )
-                : Math.floor(
-                    Date.now() /
-                      1000
-                  );
+            const price = Number(ticker.price);
 
-            const candleTime =
-              getCandleTime(
-                tradeTime
-              );
-
-            if (
-              !currentCandle ||
-              currentCandle.time !==
-                candleTime
-            ) {
-              currentCandle = {
-                time:
-                  candleTime,
-
-                open:
-                  price,
-
-                high:
-                  price,
-
-                low:
-                  price,
-
-                close:
-                  price
-              };
-            } else {
-              currentCandle.high =
-                Math.max(
-                  currentCandle.high,
-                  price
-                );
-
-              currentCandle.low =
-                Math.min(
-                  currentCandle.low,
-                  price
-                );
-
-              currentCandle.close =
-                price;
+            if (!Number.isFinite(price)) {
+              continue;
             }
 
-            candleSeries.update(
-              currentCandle
+            applyLivePrice(
+              price,
+              Date.now()
             );
-
-            chart
-              .timeScale()
-              .scrollToRealTime();
           }
         }
+
+        statusElement.textContent = "XRP/USD · 15m · LIVE";
       };
 
       socket.onerror = () => {
-        status.textContent =
-          "LIVE FEED ERROR";
-
-        status.className =
-          "error";
+        statusElement.textContent = "FEED ERROR";
+        statusElement.className = "error";
       };
 
       socket.onclose = () => {
-        status.textContent =
-          "RECONNECTING…";
+        statusElement.textContent = "RECONNECTING…";
+        statusElement.className = "";
 
-        status.className = "";
+        clearTimeout(reconnectTimer);
 
-        setTimeout(
-          connectLiveFeed,
-          1500
-        );
+        reconnectTimer = setTimeout(() => {
+          connect();
+        }, 1000);
       };
     }
 
     async function start() {
       try {
         await loadHistory();
-
-        connectLiveFeed();
+        connect();
       } catch (error) {
-        status.textContent =
-          "LOAD ERROR";
-
-        status.className =
-          "error";
-
-        console.error(
-          error
-        );
+        statusElement.textContent = "LOAD ERROR";
+        statusElement.className = "error";
+        console.error(error);
       }
     }
 
-    window.addEventListener(
-      "resize",
-      () => {
-        chart.applyOptions({
-          width:
-            window.innerWidth,
+    window.addEventListener("resize", () => {
+      chart.applyOptions({
+        width: window.innerWidth,
+        height: window.innerHeight
+      });
+    });
 
-          height:
-            window.innerHeight
-        });
+    document.addEventListener("visibilitychange", () => {
+      if (
+        document.visibilityState === "visible" &&
+        (!socket || socket.readyState > 1)
+      ) {
+        connect();
       }
-    );
+    });
 
     start();
   </script>
