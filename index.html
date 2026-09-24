@@ -1,137 +1,401 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+  >
+
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <title>XRP Live</title>
+  <meta name="theme-color" content="#000000">
+
+  <title>XRP Live · 15m</title>
 
   <style>
-    html, body {
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
       margin: 0;
       padding: 0;
       width: 100%;
       height: 100%;
-      background: #000;
+      background: #000000;
       overflow: hidden;
     }
 
     #chart {
+      position: fixed;
+      inset: 0;
       width: 100vw;
       height: 100vh;
+    }
+
+    #status {
+      position: fixed;
+      top: max(12px, env(safe-area-inset-top));
+      left: 12px;
+      z-index: 10;
+
+      padding: 6px 9px;
+      border-radius: 8px;
+
+      background: rgba(0, 0, 0, 0.70);
+      color: #ffffff;
+
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+      font-size: 12px;
+      font-weight: 600;
+
+      pointer-events: none;
+    }
+
+    #status.live {
+      color: #20e38b;
+    }
+
+    #status.error {
+      color: #ff5c70;
     }
   </style>
 </head>
 
 <body>
 
-<div id="chart"></div>
+  <div id="chart"></div>
+  <div id="status">CONNECTING…</div>
 
-<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
 
-<script>
-const container = document.getElementById("chart");
+  <script>
+    const PRODUCT = "XRP-USD";
+    const GRANULARITY = 900;
 
-const chart = LightweightCharts.createChart(container, {
-  width: window.innerWidth,
-  height: window.innerHeight,
-  layout: {
-    background: { color: "#000000" },
-    textColor: "#ffffff"
-  },
-  grid: {
-    vertLines: { color: "#1f1f1f" },
-    horzLines: { color: "#1f1f1f" }
-  },
-  timeScale: {
-    timeVisible: true,
-    secondsVisible: false
-  },
-  rightPriceScale: {
-    borderVisible: false
-  }
-});
+    const chartContainer =
+      document.getElementById("chart");
 
-const candles = chart.addCandlestickSeries({
-  upColor: "#00c087",
-  downColor: "#f6465d",
-  borderVisible: false,
-  wickUpColor: "#00c087",
-  wickDownColor: "#f6465d"
-});
+    const status =
+      document.getElementById("status");
 
-async function loadHistory() {
-  const url =
-    "https://api.exchange.coinbase.com/products/XRP-USD/candles?granularity=900";
+    const chart =
+      LightweightCharts.createChart(
+        chartContainer,
+        {
+          width: window.innerWidth,
+          height: window.innerHeight,
 
-  const response = await fetch(url);
-  const data = await response.json();
+          layout: {
+            background: {
+              color: "#000000"
+            },
 
-  const formatted = data
-    .map(c => ({
-      time: c[0],
-      low: c[1],
-      high: c[2],
-      open: c[3],
-      close: c[4]
-    }))
-    .sort((a, b) => a.time - b.time);
+            textColor: "#ffffff"
+          },
 
-  candles.setData(formatted);
-  chart.timeScale().fitContent();
-}
+          grid: {
+            vertLines: {
+              color: "#1d1d1d"
+            },
 
-loadHistory();
+            horzLines: {
+              color: "#1d1d1d"
+            }
+          },
 
-const socket =
-  new WebSocket(wss://"ws-feed.exchange.coinbase.com");
+          rightPriceScale: {
+            borderColor: "#333333"
+          },
 
-socket.onopen = () => {
-  socket.send(JSON.stringify({
-    type: "subscribe",
-    product_ids: ["XRP-USD"],
-    channels: ["ticker"]
-  }));
-};
+          timeScale: {
+            borderColor: "#333333",
+            timeVisible: true,
+            secondsVisible: false,
+            rightOffset: 4,
+            barSpacing: 8
+          },
 
-socket.onmessage = event => {
-  const msg = JSON.parse(event.data);
+          crosshair: {
+            mode:
+              LightweightCharts.CrosshairMode.Normal
+          }
+        }
+      );
 
-  if (msg.type !== "ticker" || !msg.price) return;
+    const candleSeries =
+      chart.addCandlestickSeries({
+        upColor: "#20e38b",
+        downColor: "#ff4d67",
 
-  const price = Number(msg.price);
-  const now = Math.floor(Date.now() / 1000);
+        borderUpColor: "#20e38b",
+        borderDownColor: "#ff4d67",
 
-  // Beginning of the current 15-minute interval
-  const candleTime = Math.floor(now / 900) * 900;
+        wickUpColor: "#20e38b",
+        wickDownColor: "#ff4d67"
+      });
 
-  const current = window.currentCandle;
+    let currentCandle = null;
 
-  if (!current || current.time !== candleTime) {
-    window.currentCandle = {
-      time: candleTime,
-      open: price,
-      high: price,
-      low: price,
-      close: price
-    };
-  } else {
-    current.high = Math.max(current.high, price);
-    current.low = Math.min(current.low, price);
-    current.close = price;
-  }
+    function getCandleTime(unixTime) {
+      return (
+        Math.floor(
+          unixTime / GRANULARITY
+        ) * GRANULARITY
+      );
+    }
 
-  candles.update(window.currentCandle);
-};
+    async function loadHistory() {
+      const url =
+        "https://api.exchange.coinbase.com/products/" +
+        PRODUCT +
+        "/candles?granularity=" +
+        GRANULARITY;
 
-window.addEventListener("resize", () => {
-  chart.applyOptions({
-    width: window.innerWidth,
-    height: window.innerHeight
-  });
-});
-</script>
+      const response =
+        await fetch(url, {
+          cache: "no-store"
+        });
+
+      if (!response.ok) {
+        throw new Error(
+          "History request failed"
+        );
+      }
+
+      const data =
+        await response.json();
+
+      const formatted =
+        data
+          .map(candle => ({
+            time: Number(candle[0]),
+            low: Number(candle[1]),
+            high: Number(candle[2]),
+            open: Number(candle[3]),
+            close: Number(candle[4])
+          }))
+          .sort(
+            (a, b) =>
+              a.time - b.time
+          );
+
+      candleSeries.setData(
+        formatted
+      );
+
+      currentCandle =
+        formatted[
+          formatted.length - 1
+        ];
+
+      chart
+        .timeScale()
+        .scrollToRealTime();
+    }
+
+    function connectLiveFeed() {
+      const socket =
+        new WebSocket(
+          "wss://advanced-trade-ws.coinbase.com"
+        );
+
+      socket.onopen = () => {
+        status.textContent =
+          "XRP/USD · 15m · LIVE";
+
+        status.className =
+          "live";
+
+        socket.send(
+          JSON.stringify({
+            type: "subscribe",
+
+            product_ids: [
+              PRODUCT
+            ],
+
+            channel:
+              "market_trades"
+          })
+        );
+      };
+
+      socket.onmessage = event => {
+        let message;
+
+        try {
+          message =
+            JSON.parse(
+              event.data
+            );
+        } catch {
+          return;
+        }
+
+        if (
+          message.channel !==
+          "market_trades"
+        ) {
+          return;
+        }
+
+        const events =
+          message.events || [];
+
+        for (
+          const eventItem
+          of events
+        ) {
+          const trades =
+            eventItem.trades || [];
+
+          for (
+            const trade
+            of trades
+          ) {
+            const price =
+              Number(
+                trade.price
+              );
+
+            if (
+              !Number.isFinite(
+                price
+              )
+            ) {
+              continue;
+            }
+
+            const tradeTime =
+              trade.time
+                ? Math.floor(
+                    new Date(
+                      trade.time
+                    ).getTime() /
+                      1000
+                  )
+                : Math.floor(
+                    Date.now() /
+                      1000
+                  );
+
+            const candleTime =
+              getCandleTime(
+                tradeTime
+              );
+
+            if (
+              !currentCandle ||
+              currentCandle.time !==
+                candleTime
+            ) {
+              currentCandle = {
+                time:
+                  candleTime,
+
+                open:
+                  price,
+
+                high:
+                  price,
+
+                low:
+                  price,
+
+                close:
+                  price
+              };
+            } else {
+              currentCandle.high =
+                Math.max(
+                  currentCandle.high,
+                  price
+                );
+
+              currentCandle.low =
+                Math.min(
+                  currentCandle.low,
+                  price
+                );
+
+              currentCandle.close =
+                price;
+            }
+
+            candleSeries.update(
+              currentCandle
+            );
+
+            chart
+              .timeScale()
+              .scrollToRealTime();
+          }
+        }
+      };
+
+      socket.onerror = () => {
+        status.textContent =
+          "LIVE FEED ERROR";
+
+        status.className =
+          "error";
+      };
+
+      socket.onclose = () => {
+        status.textContent =
+          "RECONNECTING…";
+
+        status.className = "";
+
+        setTimeout(
+          connectLiveFeed,
+          1500
+        );
+      };
+    }
+
+    async function start() {
+      try {
+        await loadHistory();
+
+        connectLiveFeed();
+      } catch (error) {
+        status.textContent =
+          "LOAD ERROR";
+
+        status.className =
+          "error";
+
+        console.error(
+          error
+        );
+      }
+    }
+
+    window.addEventListener(
+      "resize",
+      () => {
+        chart.applyOptions({
+          width:
+            window.innerWidth,
+
+          height:
+            window.innerHeight
+        });
+      }
+    );
+
+    start();
+  </script>
 
 </body>
 </html>
