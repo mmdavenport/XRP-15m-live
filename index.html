@@ -85,7 +85,7 @@ async function loadHistory() {
 loadHistory();
 
 const socket =
-  new WebSocket("wss://ws-feed.exchange.coinbase.com");
+  new WebSocket(wss://"ws-feed.exchange.coinbase.com");
 
 socket.onopen = () => {
   socket.send(JSON.stringify({
