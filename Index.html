@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>XRP Live</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #chart {
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="chart"></div>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+
+<script>
+const container = document.getElementById("chart");
+
+const chart = LightweightCharts.createChart(container, {
+  width: window.innerWidth,
+  height: window.innerHeight,
+  layout: {
+    background: { color: "#000000" },
+    textColor: "#ffffff"
+  },
+  grid: {
+    vertLines: { color: "#1f1f1f" },
+    horzLines: { color: "#1f1f1f" }
+  },
+  timeScale: {
+    timeVisible: true,
+    secondsVisible: false
+  },
+  rightPriceScale: {
+    borderVisible: false
+  }
+});
+
+const candles = chart.addCandlestickSeries({
+  upColor: "#00c087",
+  downColor: "#f6465d",
+  borderVisible: false,
+  wickUpColor: "#00c087",
+  wickDownColor: "#f6465d"
+});
+
+async function loadHistory() {
+  const url =
+    "https://api.exchange.coinbase.com/products/XRP-USD/candles?granularity=900";
+
+  const response = await fetch(url);
+  const data = await response.json();
+
+  const formatted = data
+    .map(c => ({
+      time: c[0],
+      low: c[1],
+      high: c[2],
+      open: c[3],
+      close: c[4]
+    }))
+    .sort((a, b) => a.time - b.time);
+
+  candles.setData(formatted);
+  chart.timeScale().fitContent();
+}
+
+loadHistory();
+
+const socket =
+  new WebSocket("wss://ws-feed.exchange.coinbase.com");
+
+socket.onopen = () => {
+  socket.send(JSON.stringify({
+    type: "subscribe",
+    product_ids: ["XRP-USD"],
+    channels: ["ticker"]
+  }));
+};
+
+socket.onmessage = event => {
+  const msg = JSON.parse(event.data);
+
+  if (msg.type !== "ticker" || !msg.price) return;
+
+  const price = Number(msg.price);
+  const now = Math.floor(Date.now() / 1000);
+
+  // Beginning of the current 15-minute interval
+  const candleTime = Math.floor(now / 900) * 900;
+
+  const current = window.currentCandle;
+
+  if (!current || current.time !== candleTime) {
+    window.currentCandle = {
+      time: candleTime,
+      open: price,
+      high: price,
+      low: price,
+      close: price
+    };
+  } else {
+    current.high = Math.max(current.high, price);
+    current.low = Math.min(current.low, price);
+    current.close = price;
+  }
+
+  candles.update(window.currentCandle);
+};
+
+window.addEventListener("resize", () => {
+  chart.applyOptions({
+    width: window.innerWidth,
+    height: window.innerHeight
+  });
+});
+</script>
+
+</body>
+</html>
